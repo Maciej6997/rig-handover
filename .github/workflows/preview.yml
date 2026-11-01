@@ -1,0 +1,58 @@
+# Preview for review (plan.md § 3, § 4; ADR 0003). Builds the digest page in CI and deploys it to
+# GitHub Pages as an artifact, so the preview never lands in git. Run with marker=false to take the
+# lane marker off the same link once the review is in.
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      marker:
+        description: Show the lane marker (vars.LANE_MARKER) in the banner
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      LANE_MARKER: ${{ inputs.marker && vars.LANE_MARKER || '' }}
+      PORT: 8787
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Save /digest/2026-10-28 as one HTML file
+        run: |
+          npm start > rig.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:$PORT/health && break; sleep 1; done
+          mkdir -p _site
+          curl -sf localhost:$PORT/digest/2026-10-28 -o _site/index.html
+      - name: Check the banner
+        run: |
+          if [ -n "$LANE_MARKER" ]; then grep -qF "$LANE_MARKER" _site/index.html
+          else grep -q 'no marker set' _site/index.html; fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
